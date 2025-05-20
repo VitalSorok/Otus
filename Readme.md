@@ -148,3 +148,86 @@ root@deb-vm:/home/vital# df -Th | grep vg_test
 /dev/mapper/vg_test-logdisk2 ext4      574M   24K  532M   1% /mnt/02
 /dev/mapper/vg_test-logdisk1 ext4      2.1G   46M  1.9G   3% /mnt/01
 
+#Работа со снепшотами
+#исходные данные
+
+root@deb-vm:/home/vital# lsblk
+NAME                   MAJ:MIN RM  SIZE RO TYPE MOUNTPOINTS
+sr0                     11:0    1 1024M  0 rom
+vda                    254:0    0   10G  0 disk
+├─vda1                 254:1    0  487M  0 part /boot
+├─vda2                 254:2    0    1K  0 part
+└─vda5                 254:5    0  9.5G  0 part
+  ├─deb--vm--vg-root   253:0    0  2.2G  0 lvm  /
+  ├─deb--vm--vg-var    253:2    0    1G  0 lvm  /var
+  ├─deb--vm--vg-swap_1 253:4    0  976M  0 lvm  [SWAP]
+  ├─deb--vm--vg-tmp    253:5    0  260M  0 lvm  /tmp
+  └─deb--vm--vg-home   253:6    0  5.1G  0 lvm  /home
+vdb                    254:16   0    1G  0 disk
+├─vg_test-logdisk1     253:1    0  300M  0 lvm  /mnt/01
+└─vg_test-logdisk2     253:3    0  300M  0 lvm  /mnt/02
+vdc                    254:32   0    1G  0 disk
+vdd                    254:48   0    1G  0 disk
+
+# Приготовим снепшот LV vg_test-logdisk1 c именем snap
+root@deb-vm:/home/vital# lvcreate -L 100M -s -n snap /dev/mapper/vg_test-logdisk1
+  Logical volume "snap" created.
+
+#Проверим
+root@deb-vm:/home/vital# lsblk
+NAME                    MAJ:MIN RM  SIZE RO TYPE MOUNTPOINTS
+sr0                      11:0    1 1024M  0 rom
+vda                     254:0    0   10G  0 disk
+├─vda1                  254:1    0  487M  0 part /boot
+├─vda2                  254:2    0    1K  0 part
+└─vda5                  254:5    0  9.5G  0 part
+  ├─deb--vm--vg-root    253:0    0  2.2G  0 lvm  /
+  ├─deb--vm--vg-var     253:2    0    1G  0 lvm  /var
+  ├─deb--vm--vg-swap_1  253:4    0  976M  0 lvm  [SWAP]
+  ├─deb--vm--vg-tmp     253:5    0  260M  0 lvm  /tmp
+  └─deb--vm--vg-home    253:6    0  5.1G  0 lvm  /home
+vdb                     254:16   0    1G  0 disk
+├─vg_test-logdisk2      253:3    0  300M  0 lvm  /mnt/02
+├─vg_test-logdisk1-real 253:7    0  300M  0 lvm
+│ ├─vg_test-logdisk1    253:1    0  300M  0 lvm  /mnt/01
+│ └─vg_test-snap        253:9    0  300M  0 lvm
+└─vg_test-snap-cow      253:8    0  100M  0 lvm
+  └─vg_test-snap        253:9    0  300M  0 lvm
+vdc                     254:32   0    1G  0 disk
+vdd                     254:48   0    1G  0 disk
+
+#Сэмулируем потерю данных удалением содержимого каталога  /mnt/01 И проверим что потеря данных произошла
+root@deb-vm:/home/vital# rm -rf /mnt/01/*
+root@deb-vm:/home/vital# ls -la /mnt/01/
+total 8
+drwxr-xr-x 2 root root 4096 May 20 15:41 .
+drwxr-xr-x 9 root root 4096 May 19 21:01 ..
+
+#Отчаявшись отмонтируем /mnt/01
+root@deb-vm:/home/vital# umount /mnt/01
+
+#Вспомнив про snap и воспряв духом выполним
+root@deb-vm:/home/vital# lvconvert --merge /dev/mapper/vg_test-snap
+  Merging of volume vg_test/snap started.
+  vg_test/logdisk1: Merged: 99.92%
+  vg_test/logdisk1: Merged: 100.00%
+
+#В надежде подмонтируем обратно
+root@deb-vm:/home/vital# mount /dev/mapper/vg_test-logdisk1 /mnt/01
+
+#Проверим... Оказалось все хорошо и переживать было незачем )
+root@deb-vm:/home/vital# du -h /mnt/01
+108K    /mnt/01/log/apt
+4.0K    /mnt/01/log/private
+14M     /mnt/01/log/installer/cdebconf
+15M     /mnt/01/log/installer
+31M     /mnt/01/log/journal/b1d3ee8fc5bb457292dce73d3f90b729
+31M     /mnt/01/log/journal
+32K     /mnt/01/log/exim4
+4.0K    /mnt/01/log/runit/ssh
+8.0K    /mnt/01/log/runit
+46M     /mnt/01/log
+16K     /mnt/01/lost+found
+46M     /mnt/01
+
+#Cпасибо за внимание
