@@ -1,282 +1,335 @@
-# ZFS
-# Практичекие навыки работы с ZFS
-# Исходные данные
-root@deb-vm:/home/vital# uname -a
-Linux deb-vm 6.1.0-35-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.137-1 (2025-05-07) x86_64 GNU/Linux
-root@deb-vm:/home/vital# cat /proc/version
-Linux version 6.1.0-35-amd64 (debian-kernel@lists.debian.org) (gcc-12 (Debian 12.2.0-14+deb12u1) 12.2.0, GNU ld (GNU Binutils for Debian) 2.40) #1 SMP PREEMPT_DYNAMIC Debian 6.1.137-1 (2025-05-07)
-root@deb-vm:/home/vital# lsblk
-NAME                   MAJ:MIN RM  SIZE RO TYPE MOUNTPOINTS
-sr0                     11:0    1 1024M  0 rom
-vda                    254:0    0   10G  0 disk
-+-vda1                 254:1    0  487M  0 part /boot
-+-vda2                 254:2    0    1K  0 part
-L-vda5                 254:5    0  9.5G  0 part
-  +-deb--vm--vg-root   253:0    0  4.3G  0 lvm  /
-  +-deb--vm--vg-var    253:2    0    1G  0 lvm  /var
-  +-deb--vm--vg-swap_1 253:3    0  976M  0 lvm  [SWAP]
-  +-deb--vm--vg-tmp    253:5    0  260M  0 lvm  /tmp
-  L-deb--vm--vg-home   253:6    0    3G  0 lvm  /home
-vdb                    254:16   0    1G  0 disk
-+-vg_test-logdisk1     253:1    0  300M  0 lvm
-L-vg_test-logdisk2     253:4    0  300M  0 lvm
-vdc                    254:32   0    1G  0 disk
-vdd                    254:48   0    1G  0 disk
+# NFS
+# Практические навыки работы с NFS
+# 1.Исходные данные, подготовка
 
-# 1
+# Мы имеем "машину" №1 (хостовую), будущий NFS сервер
+vital@ubuntuhost:~$ cat /etc/os-release
+PRETTY_NAME="Ubuntu 24.04.2 LTS"
 
-# Так как zfs На сервере нет, установим zfs, но перед этим подготовим систему
-root@deb-vm:/home/vital# apt update && apt upgrade -y
+# Интерфейс "virbr0" соединен с гостевой (ВМ) "машиной" 
+vital@ubuntuhost:~$ route
+Kernel IP routing table
+Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
+default         _gateway        0.0.0.0         UG    0      0        0 enp3s0f0
+172.16.0.0      0.0.0.0         255.255.255.248 U     0      0        0 enp3s0f0
+192.168.122.0   0.0.0.0         255.255.255.0   U     0      0        0 virbr0
 
-# Поскольку ядро свежее и kmod имеется оганичимся
-root@deb-vm:/home/vital# apt install linux-headers-$(uname -r) -y
+# Адрес "машины" №1 - 192.168.122.1, будущий сервер NFS
+vital@ubuntuhost:~$ ifconfig
+virbr0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet 192.168.122.1  netmask 255.255.255.0  broadcast 192.168.122.255
+        ether 52:54:00:9b:c8:24  txqueuelen 1000  (Ethernet)
+        RX packets 0  bytes 0 (0.0 B)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 0  bytes 0 (0.0 B)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
 
-# Поищем...И к сожалению не найдем...
-root@deb-vm:/home/vital# apt search zfs
-Sorting... Done
-Full Text Search... Done
-root@deb-vm:/home/vital#
+# Мы имеем "машину" №2 (гостевую или ВМ), будущий NFS клиент
+vital@deb-vm:~$ cat /etc/os-release
+PRETTY_NAME="Debian GNU/Linux 12 (bookworm)"
+NAME="Debian GNU/Linux"
 
-# Подключим репозитории contrib, дописав в конец каждой строки файла /etc/apt/sources.list слово "contrib"
-# Обновим репозитории снова
-root@deb-vm:/home/vital# apt update -y
+# Адрес "машины" №2 - 192.168.122.220, будущий клиент NFS
+vital@deb-vm:~$ ifconfig
+-bash: ifconfig: command not found
+vital@deb-vm:~$ whereis ifconfig
+ifconfig: /usr/sbin/ifconfig /usr/share/man/man8/ifconfig.8.gz
+vital@deb-vm:~$ /usr/sbin/ifconfig
+enp1s0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500
+        inet 192.168.122.220  netmask 255.255.255.0  broadcast 192.168.122.255
+        inet6 fe80::5054:ff:fe24:2e8c  prefixlen 64  scopeid 0x20<link>
+        ether 52:54:00:24:2e:8c  txqueuelen 1000  (Ethernet)
+        RX packets 0  bytes 0 (0.0 B)
+        RX errors 0  dropped 0  overruns 0  frame 0
+        TX packets 0  bytes 0 (0.0 B)
+        TX errors 0  dropped 0 overruns 0  carrier 0  collisions 0
 
-# Попытаем счастья вновь и найдем его...
-root@deb-vm:/home/vital# apt search zfs
+# 2. Действия на сервере. 
+# Устанавливаем NFS
+root@ubuntuhost:/home/vital# apt install nfs-kernel-server
+
+# Редактируем конфиг сервера. Везде где версия 4 ставим решительное n, дабы сервер работал с Vers3, как от нас этого требует тех.задание
+root@ubuntuhost:/home/vital# nano /etc/nfs.conf
+[nfsd]
+#debug=0
+#threads=8
+#host=
+#port=0
+#grace-time=90
+#lease-time=90
+#udp=n
+#tcp=y
+#vers3=y
+vers4=n
+vers4.0=n
+vers4.1=n
+vers4.2=n
+#rdma=n
+#rdma-port=20049
 ....
-zfsutils-linux/stable,now 2.1.11-1+deb12u1 amd64
-  command-line tools to manage OpenZFS filesystems
-....
 
-# Далее по накатанной
-root@deb-vm:/home/vital# apt install zfsutils-linux -y
-# Глянем есть ли среди загруженных модулей zfs
-root@deb-vm:/home/vital# kmod list | grep zfs
-zfs                  4018176  11
-zunicode              335872  1 zfs
-zzstd                 589824  1 zfs
-zlua                  192512  1 zfs
-zavl                   20480  1 zfs
-icp                   327680  1 zfs
-zcommon               110592  2 zfs,icp
-znvpair               118784  2 zfs,zcommon
-spl                   122880  6 zfs,icp,zzstd,znvpair,zcommon,zavl
-# Получается что есть 
+# Рестартуем nfs сервер. 
+root@ubuntuhost:/home/vital# systemctl restart nfs-kernel-server
 
-# 2
-# Приступим к созданию zfs.Создадим пул и файловые системы
-root@deb-vm:/home/vital# zpool create pool1 mirror /dev/vdc /dev/vdd
-root@deb-vm:/home/vital# zpool list
-NAME    SIZE  ALLOC   FREE  CKPOINT  EXPANDSZ   FRAG    CAP  DEDUP    HEALTH  ALTROOT
-pool1   960M   250K   960M        -         -     0%     0%  1.00x    ONLINE  -
-root@deb-vm:/home/vital# zfs create pool1/zfs01; zfs create pool1/zfs02; zfs create pool1/zfs03; zfs create pool1/zfs04
+# Проверяем наличие слушающих портов
+root@ubuntuhost:/home/vital# ss -tunlp | grep 2049
+tcp   LISTEN 0      64            0.0.0.0:2049       0.0.0.0:*
+tcp   LISTEN 0      64               [::]:2049          [::]:*
 
-# Посмотрим что вышло
-root@deb-vm:/home/vital# df -h
-Filesystem                    Size  Used Avail Use% Mounted on
-udev                          964M     0  964M   0% /dev
-tmpfs                         197M  664K  197M   1% /run
-/dev/mapper/deb--vm--vg-root  4.2G  2.2G  1.8G  56% /
-tmpfs                         984M     0  984M   0% /dev/shm
-tmpfs                         5.0M     0  5.0M   0% /run/lock
-/dev/vda1                     455M  132M  298M  31% /boot
-/dev/mapper/deb--vm--vg-home  2.9G  396K  2.8G   1% /home
-/dev/mapper/deb--vm--vg-tmp   234M   10K  217M   1% /tmp
-/dev/mapper/deb--vm--vg-var  1013M  306M  638M  33% /var
-pool1                         832M  128K  832M   1% /pool1
-pool1/zfs01                   832M  128K  832M   1% /pool1/zfs01
-pool1/zfs02                   832M  128K  832M   1% /pool1/zfs02
-pool1/zfs03                   832M  128K  832M   1% /pool1/zfs03
-pool1/zfs04                   832M  128K  832M   1% /pool1/zfs04
-tmpfs                         197M     0  197M   0% /run/user/1000
+root@ubuntuhost:/home/vital# ss -tunlp | grep 111
+udp   UNCONN 0      0             0.0.0.0:111        0.0.0.0:*    users:(("rpcbind",pid=692,fd=5),("systemd",pid=1,fd=40))
+udp   UNCONN 0      0                [::]:111           [::]:*    users:(("rpcbind",pid=692,fd=7),("systemd",pid=1,fd=42))
+tcp   LISTEN 0      4096          0.0.0.0:111        0.0.0.0:*    users:(("rpcbind",pid=692,fd=4),("systemd",pid=1,fd=39))
+tcp   LISTEN 0      4096             [::]:111           [::]:*    users:(("rpcbind",pid=692,fd=6),("systemd",pid=1,fd=41))
 
-# Установим разное сжатие для каждой файловой системы
-root@deb-vm:/home/vital# zfs set compression=lzjb pool1/zfs01
-root@deb-vm:/home/vital# zfs set compression=lz4 pool1/zfs02
-root@deb-vm:/home/vital# zfs set compression=gzip9 pool1/zfs03
-root@deb-vm:/home/vital# zfs set compression=zle pool1/zfs04
+# Подготавливаем директорию для экспорта
+root@ubuntuhost:/home/vital# mkdir /home/vital/upload
+root@ubuntuhost:/home/vital# chown -R nobody:nogroup /home/vital/upload
+root@ubuntuhost:/home/vital# chmod 766 /home/vital/upload
 
-# Проверим что вышло...
-root@deb-vm:/home/vital# zfs get compression
-NAME         PROPERTY     VALUE           SOURCE
-pool1        compression  off             default
-pool1/zfs01  compression  lzjb            local
-pool1/zfs02  compression  lz4             local
-pool1/zfs03  compression  gzip-9          local
-pool1/zfs04  compression  zle             local
+# Добавляем директорию для экспорта
+root@ubuntuhost:/home/vital# echo '/home/vital/upload  192.168.122.220(rw,sync,root_squash)' >> /etc/exports
+root@ubuntuhost:/home/vital# exportfs -r
 
-# Скопируем одни и те же данные в разные fs и посмотрим что же получилось
-root@deb-vm:/home/vital# cp -r /var/log /pool1/zfs01
-root@deb-vm:/home/vital# cp -r /var/log /pool1/zfs02
-root@deb-vm:/home/vital# cp -r /var/log /pool1/zfs03
-root@deb-vm:/home/vital# cp -r /var/log /pool1/zfs04
-root@deb-vm:/home/vital# df -h | grep pool1
-pool1                         768M  128K  768M   1% /pool1
-pool1/zfs01                   784M   16M  768M   3% /pool1/zfs01
-pool1/zfs02                   781M   14M  768M   2% /pool1/zfs02
-pool1/zfs03                   777M  9.0M  768M   2% /pool1/zfs03
-pool1/zfs04                   794M   27M  768M   4% /pool1/zfs04
+# проверяем 
+root@ubuntuhost:/home/vital# exportfs -s
+/home/vital/upload  192.168.122.220(sync,wdelay,hide,no_subtree_check,sec=sys,rw,secure,root_squash,no_all_squash)
 
-# И немудренно ведь ...
-root@deb-vm:/home/vital# zfs get compressratio
-NAME         PROPERTY       VALUE  SOURCE
-pool1        compressratio  2.18x  -
-pool1/zfs01  compressratio  2.20x  -
-pool1/zfs02  compressratio  2.66x  -
-pool1/zfs03  compressratio  3.94x  -
-pool1/zfs04  compressratio  1.33x  -
+# 2. Действия на клиенте. 
+# Устанавливаем NFS клиент
+root@deb-vm:/home/vital# apt install nfs-common
 
-# Таким образом gzip-9 лидирует по сжатию
+# Монтируем саму NFS
+root@deb-vm:/home/vital# mount 192.168.122.1:/home/vital/upload /mnt/01
 
+# Проверяем содержимое, все сходится, оно самое...
+root@deb-vm:/home/vital# ls -la /mnt/01
+total 16
+drwxrw-rw- 2 nobody nogroup 4096 May 28 08:41 .
+drwxr-xr-x 9 root   root    4096 May 19 21:01 ..
+-rw-r--r-- 1 nobody nogroup   25 May 27 22:40 file1
+-rw-r--r-- 1 nobody nogroup    0 May 26 14:45 file2
+-rw-r--r-- 1 nobody nogroup    7 May 28 08:41 file3
 
-# 3
-# Определение настроек пула
-# Скачиваем архив в домашний каталог: 
-root@deb-vm:/home/vital# wget -O archive.tar.gz --no-check-certificate 'https://drive.usercontent.google.com/download?id=1MvrcEp-WgAQe57aDEzxSRalPAwbNN1Bb&export=download'
---2025-05-21 22:46:32--  https://drive.usercontent.google.com/download?id=1MvrcEp-WgAQe57aDEzxSRalPAwbNN1Bb&export=download
-Resolving drive.usercontent.google.com (drive.usercontent.google.com)... 173.194.220.132, 2a00:1450:4010:c09::84
-Connecting to drive.usercontent.google.com (drive.usercontent.google.com)|173.194.220.132|:443... connected.
-HTTP request sent, awaiting response... 200 OK
-Length: 7275140 (6.9M) [application/octet-stream]
-Saving to: ‘archive.tar.gz’
+# Теперь необходимо настроить автомонтирование
+#Согласно презентации к занятиям есть три пути
 
-archive.tar.gz                                              100%[========================================================================================================================================>]   6.94M  3.30MB/s    in 2.1s
+#Вариант1 /etc/fstab
+#1.Добавим туда строку:192.168.122.1:/home/vital/upload /mnt/01 nfs3 defaults        0       0
 
-2025-05-21 22:46:44 (3.30 MB/s) - ‘archive.tar.gz’ saved [7275140/7275140]
+#2.перезагрузим, проверим, но увы и ах где то ошибка, не взлетел, тяги не хватило, система не грузится.
 
-# Разархивируем
-root@deb-vm:/home/vital# tar -xzvf archive.tar.gz
-zpoolexport/
-zpoolexport/filea
-zpoolexport/fileb
+#3.На запрос доступа по ssh - посылает в далекое пешее... На мое "ssh vital@192.168.122.220" отвечает немедля, а не пойти бы
+#вам: "connection refused". На попытку поговорить по человечески "virsh console deb-vm" полный игнор - виснет наглухо.
 
-# Проверяем возможность импорта
-root@deb-vm:/home/vital# zpool import -d zpoolexport/
-   pool: otus
-     id: 6554193320433390805
-  state: ONLINE
-status: Some supported features are not enabled on the pool.
-        (Note that they may be intentionally disabled if the
-        'compatibility' property is set.)
- action: The pool can be imported using its name or numeric identifier, though
-        some features will not be available without an explicit 'zpool upgrade'.
- config:
+#4.Значит надо как то отредактировать проклятый /etc/fstab, располагающийся на диске "deb-vm.gcow2" с которого стартует злополучная
+#"deb-vm". Как это сделать?
 
-        otus                               ONLINE
-          mirror-0                         ONLINE
-            /home/vital/zpoolexport/filea  ONLINE
-            /home/vital/zpoolexport/fileb  ONLINE
+#5.Останавливаем машину "virsh destroy deb-vm", потому как на "virsh shutdown deb-vm" мы не реагируем никак. Команда отрабатывет 
+#без ошибок, а машина по прежнему в состоянии running.
 
-# Пишут что можно импортировать, ну можно так можно... Импортируем...раз можно...
-root@deb-vm:/home/vital# zpool import -d zpoolexport/ otus
+#6.Установим 
+root@deb-vm:/home/vital#apt install guestfs-tools
 
-# Посмотрим на его статус
-root@deb-vm:/home/vital# zpool status otus
-  pool: otus
- state: ONLINE
-status: Some supported and requested features are not enabled on the pool.
-        The pool can still be used, but some features are unavailable.
-action: Enable all features using 'zpool upgrade'. Once this is done,
-        the pool may no longer be accessible by software that does not support
-        the features. See zpool-features(7) for details.
-config:
+#Далее расковыряем злополучный deb-vm.qcow2
+root@deb-vm:/home/vital# guestfish --rw -a /var/lib/libvirt/images/deb.qcow2
+><fs>
+><fs> launch
+><fs> list-filesystems
+... 
+#Найдем корневой раздел(LVM), смонтируем его в /, октроем vi /etc/fstab,
+#Закоментируем строку: 192.168.122.1:/home/vital/upload /mnt/01 nfs3 defaults        0       0
+><fs> quit
 
-        NAME                               STATE     READ WRITE CKSUM
-        otus                               ONLINE       0     0     0
-          mirror-0                         ONLINE       0     0     0
-            /home/vital/zpoolexport/filea  ONLINE       0     0     0
-            /home/vital/zpoolexport/fileb  ONLINE       0     0     0
+#Ну с богом...
+root@deb-vm:/home/vital# virsh start deb-vm
+Domain 'deb-vm' started
+root@deb-vm:/home/vital# ssh vital@192.168.122.220
+#Все открывается и работает...
 
-# Посмотрим все его настройки командой
-root@deb-vm:/home/vital# zpool get all otus
-NAME  PROPERTY                       VALUE                          SOURCE
-otus  size                           480M                           -
-otus  capacity                       0%                             -
-otus  altroot                        -                              default
-otus  health                         ONLINE                         -
-otus  guid                           6554193320433390805            -
-otus  version                        -                              default
-otus  bootfs                         -                              default
-otus  delegation                     on                             default
-otus  autoreplace                    off                            default
-otus  cachefile                      -                              default
-otus  failmode                       wait                           default
-otus  listsnapshots                  off                            default
-otus  autoexpand                     off                            default
-otus  dedupratio                     1.00x                          -
-otus  free                           478M                           -
-otus  allocated                      2.11M                          -
-otus  readonly                       off                            -
-otus  ashift                         0                              default
-otus  comment                        -                              default
-otus  expandsize                     -                              -
-otus  freeing                        0                              -
-otus  fragmentation                  0%                             -
-otus  leaked                         0                              -
-otus  multihost                      off                            default
-otus  checkpoint                     -                              -
-otus  load_guid                      4051498291176065774            -
-otus  autotrim                       off                            default
-otus  compatibility                  off                            default
-otus  feature@async_destroy          enabled                        local
-otus  feature@empty_bpobj            active                         local
-otus  feature@lz4_compress           active                         local
-otus  feature@multi_vdev_crash_dump  enabled                        local
-otus  feature@spacemap_histogram     active                         local
-otus  feature@enabled_txg            active                         local
-otus  feature@hole_birth             active                         local
-otus  feature@extensible_dataset     active                         local
-otus  feature@embedded_data          active                         local
-otus  feature@bookmarks              enabled                        local
-otus  feature@filesystem_limits      enabled                        local
-otus  feature@large_blocks           enabled                        local
-otus  feature@large_dnode            enabled                        local
-otus  feature@sha512                 enabled                        local
-otus  feature@skein                  enabled                        local
-otus  feature@edonr                  enabled                        local
-otus  feature@userobj_accounting     active                         local
-otus  feature@encryption             enabled                        local
-otus  feature@project_quota          active                         local
-otus  feature@device_removal         enabled                        local
-otus  feature@obsolete_counts        enabled                        local
-otus  feature@zpool_checkpoint       enabled                        local
-otus  feature@spacemap_v2            active                         local
-otus  feature@allocation_classes     enabled                        local
-otus  feature@resilver_defer         enabled                        local
-otus  feature@bookmark_v2            enabled                        local
-otus  feature@redaction_bookmarks    disabled                       local
-otus  feature@redacted_datasets      disabled                       local
-otus  feature@bookmark_written       disabled                       local
-otus  feature@log_spacemap           disabled                       local
-otus  feature@livelist               disabled                       local
-otus  feature@device_rebuild         disabled                       local
-otus  feature@zstd_compress          disabled                       local
-otus  feature@draid                  disabled                       local
+#Вариант2 (sudo systemctl restart remote-fs.target) пропустим 
 
-# Запросим также все параметры файловой системы и выберем из них нужное нам
-root@deb-vm:/home/vital# zfs get all otus | grep -P 'available|readonly|recordsize|compression|checksum'
-otus  available             350M                   -
-otus  recordsize            128K                   local
-otus  checksum              sha256                 local
-otus  compression           zle                    local
-otus  readonly              off                    default
+#Вариант3 Отработаем.
+root@deb-vm:/home/vital# nano /etc/systemd/system/mnt-01.mount
 
+[Unit]
+Description=Mount NFS 192.168.122.1
 
-# Работа со снапшотом, поиск сообщения от преаподавателя
-# скачиваем файл со снапшотом
-root@deb-vm:/home/vital# wget -O otus_task2.file --no-check-certificate https://drive.usercontent.google.com/download?id=1wgxjih8YZ-cqLqaZVa0lA3h3Y029c3oI&export=download
+[Mount]
+What=192.168.122.1:/home/vital/upload
+Where=/mnt/01
+Type=nfs
+Options=defaults
 
-# Проверяем наличие
-root@deb-vm:/home/vital# ls -la | grep otus_task2.file
--rw-r--r-- 1 root  root  5432736 Dec  6  2023 otus_task2.file
+[Install]
+WantedBy=multi-user.target
+
+#Далее
+root@deb-vm:/home/vital# nano /etc/systemd/system/mnt-01.automount
+
+[Unit]
+Description=Automount NFS 192.168.122.1
+
+[Automount]
+Where=/mnt/01
+TimeoutIdleSec=30
+
+[Install]
+WantedBy=multi-user.target
+
+#Перезагружаем файлы служб, обновляем конфигурацию
+root@deb-vm:/home/vital# systemctl daemon-reload
+
+#Добавляем в автозагрузку
+root@deb-vm:/home/vital# systemctl enable mnt-01.automount 
+
+#Перезагружаемся и радуемся жизни... Все на месте... правда не сразу, а спустя 30 сек
+root@deb-vm:/home/vital# ls -la /mnt/01
+total 16
+drwxrw-rw- 2 nobody nogroup 4096 May 28 20:31 .
+drwxr-xr-x 9 root   root    4096 May 19 21:01 ..
+-rw-r--r-- 1 nobody nogroup   25 May 27 22:40 file1
+-rw-r--r-- 1 nobody nogroup    0 May 26 14:45 file2
+-rw-r--r-- 1 nobody nogroup    7 May 28 08:41 file3
+
+#Проверка работоспособности
+#Заходим на сервер. 
+#Заходим в каталог /home/vital/upload.
+#Создаём тестовый файл touch check_file.
+root@ubuntuhost:/home/vital/upload# touch check_file
+
+#Заходим на клиент.
+#Заходим в каталог /mnt/01.
+root@deb-vm:/home/vital# cd /mnt/01
+ 
+#Проверяем наличие ранее созданного файла.
+root@deb-vm:/mnt/01# ls -la
+total 16
+drwxrw-rw- 2 nobody nogroup 4096 May 28 20:34 .
+drwxr-xr-x 9 root   root    4096 May 19 21:01 ..
+-rw-r--r-- 1 root   root       0 May 28 20:34 check_file
+-rw-r--r-- 1 nobody nogroup   25 May 27 22:40 file1
+-rw-r--r-- 1 nobody nogroup    0 May 26 14:45 file2
+-rw-r--r-- 1 nobody nogroup    7 May 28 08:41 file3
+
+#Создаём тестовый файл touch client_file.
+root@deb-vm:/mnt/01# touch client_file
+ 
+#Проверяем, что файл успешно создан.
+root@deb-vm:/mnt/01# ls -la
+total 16
+drwxrw-rw- 2 nobody nogroup 4096 May 28 20:37 .
+drwxr-xr-x 9 root   root    4096 May 19 21:01 ..
+-rw-r--r-- 1 root   root       0 May 28 20:34 check_file
+-rw-r--r-- 1 nobody nogroup    0 May 28 20:37 client_file
+-rw-r--r-- 1 nobody nogroup   25 May 27 22:40 file1
+-rw-r--r-- 1 nobody nogroup    0 May 26 14:45 file2
+-rw-r--r-- 1 nobody nogroup    7 May 28 08:41 file3
+
+#Перезагружаем клиент
+root@deb-vm:/mnt/01# reboot
+
+Broadcast message from root@deb-vm on pts/1 (Wed 2025-05-28 20:39:46 +05):
+
+The system will reboot now!
+
+root@deb-vm:/mnt/01# Connection to 192.168.122.220 closed by remote host.
+Connection to 192.168.122.220 closed.
+
+#Предварительно проверяем клиент
+#Заходим на клиент
+vital@ubuntuhost:~$ ssh vital@192.168.122.220
+Linux deb-vm 6.1.0-35-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.137-1 (2025-05-07) x86_64
+
+The programs included with the Debian GNU/Linux system are free software;
+the exact distribution terms for each program are described in the
+individual files in /usr/share/doc/*/copyright.
+
+Debian GNU/Linux comes with ABSOLUTELY NO WARRANTY, to the extent
+permitted by applicable law.
+You have new mail.
+Last login: Wed May 28 19:44:42 2025 from 192.168.122.1
+vital@deb-vm:~$
+
+#Заходим в каталог /mnt/01
+root@deb-vm:/home/vital# cd /mnt/01
+
+#Проверяем наличие ранее созданных файлов
+root@deb-vm:/mnt/01# ls -la
+total 16
+drwxrw-rw- 2 nobody nogroup 4096 May 28 20:37 .
+drwxr-xr-x 9 root   root    4096 May 19 21:01 ..
+-rw-r--r-- 1 root   root       0 May 28 20:34 check_file
+-rw-r--r-- 1 nobody nogroup    0 May 28 20:37 client_file
+-rw-r--r-- 1 nobody nogroup   25 May 27 22:40 file1
+-rw-r--r-- 1 nobody nogroup    0 May 26 14:45 file2
+-rw-r--r-- 1 nobody nogroup    7 May 28 08:41 file3
 #Все на месте
 
-# Ищем файл с именем "secret_message"
-root@deb-vm:/home/vital# find /otus/test -name "secret_message"
-/otus/test/task1/file_mess/secret_message
-#файл нашелся
+#Проверяем сервер
+#Заходим на сервер в отдельном окне терминала
+#Перезагружаем сервер
+#Заходим на сервер
+#Проверяем наличие файлов в каталоге /home/vital/upload/
+root@ubuntuhost:/home/vital# ls -la /home/vital/upload
+total 16
+drwxrw-rw- 2 nobody nogroup 4096 мая 28 15:37 .
+drwxr-x--- 6 vital  vital   4096 мая 27 16:43 ..
+-rw-r--r-- 1 root   root       0 мая 28 15:34 check_file
+-rw-r--r-- 1 nobody nogroup    0 мая 28 15:37 client_file
+-rw-r--r-- 1 nobody nogroup   25 мая 27 17:40 file1
+-rw-r--r-- 1 nobody nogroup    0 мая 26 09:45 file2
+-rw-r--r-- 1 nobody nogroup    7 мая 28 03:41 file3
 
-# Посмотрим что же там
-root@deb-vm:/home/vital# more /otus/test/task1/file_mess/secret_message
-https://otus.ru/lessons/linux-hl/
-#какая то ссылка. Ссылка на курс "Инфрасруктура высоконагрженных систем"
+#Проверяем экспорты exportfs -s
+root@ubuntuhost:/home/vital# exportfs -s
+/home/vital/upload  192.168.122.220(sync,wdelay,hide,no_subtree_check,sec=sys,rw,secure,root_squash,no_all_squash)
+
+#Проверяем работу RPC showmount -a 192.168.122.1.
+root@ubuntuhost:/home/vital# showmount -a 192.168.122.1
+All mount points on 192.168.122.1:
+192.168.122.220:/home/vital/upload
+
+#Проверяем клиент: 
+#Возвращаемся на клиент
+#Перезагружаем клиент
+#Заходим на клиент
+#Проверяем работу RPC showmount -a 192.168.122.1
+root@deb-vm:/home/vital# showmount -a 192.168.122.1
+All mount points on 192.168.122.1:
+192.168.122.220:/home/vital/upload
+
+#Заходим в каталог /mnt/01
+root@deb-vm:/home/vital# cd /mnt/01
+root@deb-vm:/mnt/01#
+
+#Проверяем статус монтирования mount | grep mnt
+root@deb-vm:/mnt/01# mount | grep mnt
+systemd-1 on /mnt/01 type autofs (rw,relatime,fd=55,pgrp=1,timeout=30,minproto=5,maxproto=5,direct,pipe_ino=14248)
+192.168.122.1:/home/vital/upload on /mnt/01 type nfs (rw,relatime,vers=3,rsize=1048576,wsize=1048576,namlen=255,hard,proto=tcp,timeo=600,retrans=2,sec=sys,mountaddr=192.168.122.1,mountvers=3,mountport=43365,mountproto=udp,local_lock=none,addr=192.168.122.1)
+
+#Проверяем наличие ранее созданных файлов
+root@deb-vm:/mnt/01# ls -la
+total 16
+drwxrw-rw- 2 nobody nogroup 4096 May 28 20:37 .
+drwxr-xr-x 9 root   root    4096 May 19 21:01 ..
+-rw-r--r-- 1 root   root       0 May 28 20:34 check_file
+-rw-r--r-- 1 nobody nogroup    0 May 28 20:37 client_file
+-rw-r--r-- 1 nobody nogroup   25 May 27 22:40 file1
+-rw-r--r-- 1 nobody nogroup    0 May 26 14:45 file2
+-rw-r--r-- 1 nobody nogroup    7 May 28 08:41 file3
+
+#Создаём тестовый файл touch final_check
+root@deb-vm:/mnt/01# touch final_check
+
+#Проверяем, что файл успешно создан.
+root@deb-vm:/mnt/01# ls -la
+total 16
+drwxrw-rw- 2 nobody nogroup 4096 May 28 20:58 .
+drwxr-xr-x 9 root   root    4096 May 19 21:01 ..
+-rw-r--r-- 1 root   root       0 May 28 20:34 check_file
+-rw-r--r-- 1 nobody nogroup    0 May 28 20:37 client_file
+-rw-r--r-- 1 nobody nogroup   25 May 27 22:40 file1
+-rw-r--r-- 1 nobody nogroup    0 May 26 14:45 file2
+-rw-r--r-- 1 nobody nogroup    7 May 28 08:41 file3
+-rw-r--r-- 1 nobody nogroup    0 May 28 20:58 final_check
