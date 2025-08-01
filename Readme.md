@@ -1,68 +1,152 @@
-#!/bin/bash
-#set -x #Отладка
-var=$1
-p='       '
-if [[ "$var" == "a" ]]; then
-   echo -e "\e[95mPID Command_name State Tty_nr Utime(x0,01) Stime(x0,01)\e[0m" | sed "s/ /$p $p $p/2" | sed "s/ /$p/1"
-   cat /proc/[0-9]*/stat | awk '{print $1,$2,$3,$7,$14,$15}' | column -t -o "$p" | awk '$4 != 0'
-elif [[ "$var" == "x" ]]; then
-  echo -e "\e[95mPID Command_name State Tty_nr Utime(x0,01) Stime(x0,01)\e[0m" | sed "s/ /$p $p $p/2" | sed "s/ /$p/1"
-  cat /proc/[0-9]*/stat | awk '{print $1,$2,$3,$7,$14,$15}' | column -t -o "$p" | awk '$4 == 0'
-elif [[ "$var" == "ax" ]]; then
-  echo -e "\e[95mPID Command_name State Tty_nr Utime(x0,01) Stime(x0,01)\e[0m" | sed "s/ /$p $p $p/2" | sed "s/ /$p/1"
-  cat /proc/[0-9]*/stat | awk '{print $1,$2,$3,$7,$14,$15}' | column -t -o "$p"
-elif [[ "$var" == "" ]]; then
-  echo -e "\e[95mPID Command_name State Tty_nr Utime(x0,01) Stime(x0,01)\e[0m" | sed "s/ /$p $p $p/2" | sed "s/ /$p/1"
-  cat /proc/[0-9]*/stat | awk '{print $1,$2,$3,$7,$14,$15}' | column -t -o "$p"
-elif [[ "$var" == "h" ]]; then
-echo -e "
-        Используемые опции к команде:
-        \e[95ma\e[0m -  Показать процессы, связанные с терминалом, кроме главных системных процессов сеанса
-        \e[95mx\e[0m -  Показать процессы, отсоединённые от терминала
-        \e[95max\e[0m - ПОказать все процессы"
-echo  -e "
-        Расшифровка вывода:
-        \e[95mPID\e[0m - The process ID
+# Vagrant-стенд для обновления ядра и создания образа системы
+# Запустить ВМ с помощью Vagrant
 
-        \e[95mCommand_name\e[0m - The filename of the executable, in parentheses.This is visible whether or not the executable is swapped out
+# 1. При помощи нашего роутера микротик, какой то там матери и сервиса 
+# https://ipspeed.info/ поднимем SSTP до японского сервера 
 
-        \e[95mState One\e[0m - of the following characters, indicating process state:
+# 2. Cтартанем, проверим его старт
+# [vital@Komar_router] /interface sstp-client> print
+Flags: X - disabled, R - running 
+ 0  R name="sstp-out1" max-mtu=1500 max-mru=1500 mrru=disabled connect-to=vpn393718194.opengw.net:1999 http-proxy=0.0.0.0:1999 certificate=none verify-server-certificate=no verify-server-address-from-certificate=yes user="vpn" 
+      password="vpn" profile=default-encryption keepalive-timeout=60 add-default-route=no dial-on-demand=no authentication=pap,chap,mschap1,mschap2 pfs=no tls-version=any
 
-                   \e[95mR\e[0m  Running
+# 3. Промаркируем трафик, завернем весь трафик от нашего хоста в тунель SSTP при помощи Mangle и добавления статического маршрута,
+# настроим маскарад на "sstp-out1", разрешим в firewall все это дело, оттраcсируем проверим, все работает
+[vital@Komar_router] /ip route> print
+Flags: X - disabled, A - active, D - dynamic, C - connect, S - static, r - rip, b - bgp, o - ospf, m - mme, B - blackhole, U - unreachable, P - prohibit 
+ #      DST-ADDRESS        PREF-SRC        GATEWAY            DISTANCE
 
-                   \e[95mS\e[0m  Sleeping in an interruptible wait
+ 1 A S  ;;; vagrant
+        0.0.0.0/0                          1.0.0.1                   1
 
-                   \e[95mD\e[0m  Waiting in uninterruptible disk sleep
+ 4 ADC  1.0.0.1/32         10.211.1.15     sstp-out1                 0
 
-                   \e[95mZ\e[0m  Zombie
+[vital@Komar_router] > ip fi fi print
+Flags: X - disabled, I - invalid, D - dynamic 
 
-                   \e[95mT\e[0m  Stopped (on a signal) or (before Linux 2.6.33) trace stopped
+24    ;;; Access to vagrant
+      chain=forward action=accept in-interface=vlan303Otus log=no log-prefix="" 
 
-                   \e[95mt\e[0m  Tracing stop (Linux 2.6.33 onward)
+[vital@Komar_router] /ip firewall nat> print
+ 8    ;;; NAT
+      chain=srcnat action=masquerade out-interface=sstp-out1 log=no log-prefix=""
 
-                   \e[95mW\e[0m  Paging (only before Linux 2.6.0)
+# 4. VirtualBox использовать не будем. У нас есть kvm+qemu. Работаем с тем, что есть,
+# нашим провайдером будет libvirt
 
-                   \e[95mX\e[0m  Dead (from Linux 2.6.0 onward)
+# 5. Тащим вагрант
+root@ubuntuhost:/home/vital# curl -O https://releases.hashicorp.com/vagrant/2.4.7/vagrant_2.4.7-1_amd64.deb
 
-                   \e[95mx\e[0m  Dead (Linux 2.6.33 to 3.13 only)
+# 6. Ставим вагрант
+root@ubuntuhost:/home/vital# apt install ./vagrant_2.4.7-1_amd64.deb
 
-                   \e[95mK\e[0m  Wakekill (Linux 2.6.33 to 3.13 only)
+# 7. Смотрим вагрант
+root@ubuntuhost:/home/vital# vagrant --version
 
-                   \e[95mW\e[0m  Waking (Linux 2.6.33 to 3.13 only)
+Vagrant 2.4.7
+# 8. Ставим необходимые для плагина вагрант зависимости
+root@ubuntuhost:/home/vital# apt install -y  build-essential ruby-dev libxml2-dev libxslt1-dev libz-dev
 
-                   \e[95mP\e[0m  Parked (Linux 3.9 to 3.13 only)
+# 9. Ставим сам плагин
+root@ubuntuhost:/home/vital# vagrant plugin install vagrant-libvirt
 
-                   \e[95mI\e[0m  Idle (Linux 4.14 onward)
+# 10. Смотрим на плагин
+root@ubuntuhost:/home/vital# vagrant plugin list
+vagrant-libvirt (0.12.2, global)
 
-        \e[95mTty_nr\e[0m - The controlling terminal of the process.(The minor device number is contained in the combination of bits 31 to 20 and 7 to 0; the major device number is in bits 15 to 8.)
+# 11. Подбираемся к самому интересному....
+root@ubuntuhost:/home/vital# nano Vagrantfile
+# Чтобы не было проблем с пулом добавляем 
+# v.storage_pool_name = "images"
 
-        \e[95mUtime\e[0m -  Amount of time that this process has been scheduled in user mode, measured in clock ticks (divide by sysconf(_SC_CLK_TCK)).  This includes guest time, guest_time (time spent running a virtual CPU, see
+# -*- mode: ruby -*-
+# vi: set ft=ruby :
 
-        below), so that applications that are not aware of the guest time field do not lose that time from their calculations
+# Описываем Виртуальные машины
+MACHINES = {
+  # Указываем имя ВМ "kernel update"
+  :"kernel-update" => {
+              #Какой vm box будем использовать
+              :box_name => "generic/centos8s",
+              #Указываем box_version
+              :box_version => "4.3.4",
+              #Указываем количество ядер ВМ
+              :cpus => 2,
+              #Указываем количество ОЗУ в мегабайтах
+              :memory => 1024,
+            }
+}
 
-        \e[95mStime\e[0m - Amount of time that this process has been scheduled in kernel mode, measured in clock ticks (divide by sysconf(_SC_CLK_TCK))."
-else
-echo "Ошибка ввода команды"
-#set +x #Выключение отладки
-fi
+Vagrant.configure("2") do |config|
+  MACHINES.each do |boxname, boxconfig|
+    # Отключаем проброс общей папки в ВМ
+    config.vm.synced_folder ".", "/vagrant", disabled: true
+    # Применяем конфигурацию ВМ
+    config.vm.define boxname do |box|
+      box.vm.box = boxconfig[:box_name]
+      box.vm.box_version = boxconfig[:box_version]
+      box.vm.host_name = boxname.to_s
+      box.vm.provider "libvirt" do |v|
+        v.storage_pool_name = "images"
+        v.memory = boxconfig[:memory]
+        v.cpus = boxconfig[:cpus]
+      end
+    end
+  end
+end
 
+# 12. Запускаем 
+root@ubuntuhost:/home/vital# vagrant up
+
+# 13. Смотрим
+root@ubuntuhost:/home/vital# virsh list --all
+ Id   Name                  State
+--------------------------------------
+ 2    deb-vm                running
+ 4    vital_kernel-update   running
+ -    cent-vm               shut off
+ -    deb-vm2               shut off
+
+# 14. Появилась новая машина  "4    vital_kernel-update   running" 
+
+# 15. Пройдем внутрь 
+root@ubuntuhost:/home/vital# vagrant ssh
+[vagrant@kernel-update ~]$ sudo su
+# Первая часть задания выполнена
+
+# Обновить ядро ОС из репозитория ELRepo
+# 16. Смотрим что внутри
+[root@kernel-update vagrant]# uname -r
+4.18.0-516.el8.x86_64
+
+# 17. Не пойдет, подключим репозиторий и обновимся
+root@kernel-update vagrant]# yum install -y https://www.elrepo.org/elrepo-release-8.el8.elrepo.noarch.rpm
+# Не взлетел, тяги не хваитило, все дело в том что нам необходимо подключить репозиторий vault.centos.org
+
+# 18. Тогда поступим так
+[root@kernel-update vagrant]# sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*
+[root@kernel-update vagrant]# sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*
+
+# 19. Теперь так
+root@kernel-update vagrant]# yum install -y https://www.elrepo.org/elrepo-release-8.el8.elrepo.noarch.rpm
+
+# 20. Проверим наш репозиторий 
+[root@kernel-update vagrant]# yum repolist | grep elrepo
+Failed to set locale, defaulting to C.UTF-8
+elrepo              ELRepo.org Community Enterprise Linux Repository - el8
+
+# 21. Установим ядро
+[root@kernel-update vagrant]# yum --enablerepo elrepo-kernel install kernel-ml -y
+
+# 22. Далее
+[root@kernel-update vagrant]# reboot
+Connection to 192.168.121.148 closed by remote host.
+
+# 23. Затем
+root@ubuntuhost:/home/vital# vagrant ssh
+[fog][WARNING] Unrecognized arguments: libvirt_ip_command
+Last login: Fri Aug  1 03:53:51 2025 from 192.168.121.1
+[vagrant@kernel-update ~]$ uname -r
+6.15.8-1.el8.elrepo.x86_64
+
+# Все готово
