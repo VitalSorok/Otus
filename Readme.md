@@ -1,194 +1,263 @@
-# Задание: "Настроить бэкапы"
+# Задание: "Настраиваем центральный сервер для сбора логов"
 
-# 1.Имеем две ВМ в одном домене
-# Первая ВМ(клиент):
-root@deb-vm2:/home/vital# ip a
-...
-2: enp1s0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default qlen 1000
-    link/ether 52:54:00:32:a5:84 brd ff:ff:ff:ff:ff:ff
-    inet 192.168.122.20/24 brd 192.168.122.255 scope global dynamic noprefixroute enp1s0
-       valid_lft 3516sec preferred_lft 3516sec
-    inet6 fe80::5054:ff:fe32:a584/64 scope link noprefixroute
-       valid_lft forever preferred_lft forever
-...
-root@deb-vm2:/home/vital# iptables -L -n -v
-Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
- pkts bytes target     prot opt in     out     source               destination
+# 1. В наличии две ВМ: 
 
-Chain FORWARD (policy ACCEPT 0 packets, 0 bytes)
- pkts bytes target     prot opt in     out     source               destination
+# Клиент вот с такими данными:
+root@deb-vm:/home/vital# uname -a
+Linux deb-vm 6.1.0-37-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.140-1 (2025-05-22) x86_64 GNU/Linux
 
-Chain OUTPUT (policy ACCEPT 0 packets, 0 bytes)
- pkts bytes target     prot opt in     out     source               destination
+root@deb-vm:/home/vital# nginx -v
+nginx version: nginx/1.22.1
 
-# Вторая ВМ(сервер):
-root@deb-vm:/home/vital# ip a
-2: enp1s0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default qlen 1000
-    link/ether 52:54:00:24:2e:8c brd ff:ff:ff:ff:ff:ff
+root@deb-vm:/home/vital# rsyslogd -v
+rsyslogd  8.2302.0 (aka 2023.02) compiled with:
+        PLATFORM:                               x86_64-pc-linux-gnu
+        PLATFORM (lsb_release -d):
+        FEATURE_REGEXP:                         Yes
+        GSSAPI Kerberos 5 support:              Yes
+        FEATURE_DEBUG (debug build, slow code): No
+        32bit Atomic operations supported:      Yes
+        64bit Atomic operations supported:      Yes
+        memory allocator:                       system default
+        Runtime Instrumentation (slow code):    No
+        uuid support:                           Yes
+        systemd support:                        Yes
+        Config file:                            /etc/rsyslog.conf
+        PID file:                               /run/rsyslogd.pid
+        Number of Bits in RainerScript integers: 64
+
+See https://www.rsyslog.com for more information
+
+root@deb-vm:/home/vital# apt search auditd
+Sorting... Done
+Full Text Search... Done
+auditd/oldstable,now 1:3.0.9-1 amd64 [installed]
+  User space tools for security auditing
+
+root@deb-vm:/home/vital# ip a | grep inet
+    inet 127.0.0.1/8 scope host lo
+    inet6 ::1/128 scope host noprefixroute
     inet 192.168.122.220/24 brd 192.168.122.255 scope global enp1s0
-       valid_lft forever preferred_lft forever
     inet6 fe80::5054:ff:fe24:2e8c/64 scope link
-       valid_lft forever preferred_lft forever
-...
-root@deb-vm2:/home/vital# iptables -L -n -v
-Chain INPUT (policy ACCEPT 0 packets, 0 bytes)
- pkts bytes target     prot opt in     out     source               destination
 
-Chain FORWARD (policy ACCEPT 0 packets, 0 bytes)
- pkts bytes target     prot opt in     out     source               destination
+# И почти точно такой же сервер
+root@deb-vm2:/home/vital# uname -a
+Linux deb-vm2 6.1.0-37-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.140-1 (2025-05-22) x86_64 GNU/Linux
+root@deb-vm2:/home/vital# rsyslogd -v
+rsyslogd  8.2302.0 (aka 2023.02) compiled with:
+        PLATFORM:                               x86_64-pc-linux-gnu
+        PLATFORM (lsb_release -d):
+        FEATURE_REGEXP:                         Yes
+        GSSAPI Kerberos 5 support:              Yes
+        FEATURE_DEBUG (debug build, slow code): No
+        32bit Atomic operations supported:      Yes
+        64bit Atomic operations supported:      Yes
+        memory allocator:                       system default
+        Runtime Instrumentation (slow code):    No
+        uuid support:                           Yes
+        systemd support:                        Yes
+        Config file:                            /etc/rsyslog.conf
+        PID file:                               /run/rsyslogd.pid
+        Number of Bits in RainerScript integers: 64
 
-Chain OUTPUT (policy ACCEPT 0 packets, 0 bytes)
- pkts bytes target     prot opt in     out     source 
+See https://www.rsyslog.com for more information.
 
-
-# 2. Устанавливаем на client и backup сервере borgbackup
-root@deb-vm:/home/vital#apt install -y borgbackup
-root@deb-vm2:/home/vital#apt install -y borgbackup
-
-# 3. На клиенте генерируем ключ (нам понадобиться файл id_rsa.pub): 
-root@deb-vm2:/home/vital# ssh-keygen
-
-# 4. На сервере root@deb-vm создаем пользователя 
-root@deb-vm:/home/vital# useradd -m -s /bin/bash borg
-# Каталог /var/backup			
-root@deb-vm:/home/vital# mkdir /var/backup
-# Редактируем права на каталог
-root@deb-vm:/home/vital# chown borg:borg /var/backup/
-
-# 5. Создаем и кидаем заранее сгенерированный ключ в соответствующую папку
-root@deb-vm:/home/vital# su borg
-borg@deb-vm:/home/vital$ cd ~
-borg@deb-vm:~$ pwd
-/home/borg
-borg@deb-vm:~$ mkdir ~/.ssh && touch ~/.ssh/authorized_keys
-borg@deb-vm:~$ chmod 700 .ssh
-borg@deb-vm:~$ chmod 600 .ssh/authorized_keys
-# копируем содержимое файла клиента id_rsa.pub в файл сервера authorized_keys 
-borg@deb-vm:~$ nano .ssh/authorized_keys
-
-# 6. Посмотрим имеющиеся в системе диски
-
-root@deb-vm:/home/vital# lsblk
-NAME                   MAJ:MIN RM  SIZE RO TYPE MOUNTPOINTS
-sr0                     11:0    1 1024M  0 rom
-vda                    254:0    0   10G  0 disk
-+-vda1                 254:1    0  487M  0 part /boot
-+-vda2                 254:2    0    1K  0 part
-L-vda5                 254:5    0  9.5G  0 part
-  +-deb--vm--vg-root   253:0    0  6.3G  0 lvm  /
-  +-deb--vm--vg-var    253:1    0    1G  0 lvm  /var
-  +-deb--vm--vg-swap_1 253:2    0  976M  0 lvm  [SWAP]
-  +-deb--vm--vg-tmp    253:3    0  260M  0 lvm  /tmp
-  L-deb--vm--vg-home   253:4    0    1G  0 lvm  /home
-vdb                    254:16   0    1G  0 disk 
-vdc                    254:32   0    1G  0 disk
-vdd                    254:48   0    1G  0 disk
-
-# Возьмем диск vdb и подготовим к монтированию, создадим разделы (постоянно "Enter,в конце w - write, Затем выходим)
-root@deb-vm:/home/vital# fdisk -n /dev/vdb
-# Отформатируем
-root@deb-vm:/home/vital# mkfs.ext4 /dev/vdb
-# Cмонтируем
-root@deb-vm:/home/vital# mount /dev/vdb /var/backup
-# Автомонтирование при загрузке
-root@deb-vm:/home/vital# echo "/dev/vdb /var/backup ext4    defaults        0       0" >> /etc/fstab
+root@deb-vm2:/home/vital# ip a | grep inet
+    inet 127.0.0.1/8 scope host lo
+    inet6 ::1/128 scope host noprefixroute
+    inet 192.168.122.20/24 brd 192.168.122.255 scope global dynamic noprefixroute enp1s0
+    inet6 fe80::5054:ff:fe32:a584/64 scope link noprefixroute
+    inet 172.17.0.1/16 brd 172.17.255.255 scope global docker0
 
 
-# 6. Проверяем нашу ssh авторизацию по ключу c клиентской ВМ
-root@deb-vm2:/home/vital# ssh borg@192.168.122.220
-Linux deb-vm 6.1.0-37-amd64 #1 SMP PREEMPT_DYNAMIC Debian 6.1.140-1 (2025-05-22) x86_64
+# То есть на клиенте работает веб-сервер, утилита для управления логами(запись и отправка логов на сервер), аудит который  
+# "отслеживает" нужные нам моменты(в данном случае папка конфигов веб-сервера).
+# На сервере - просто приемник логов на базе той же самой утилиты. Сервер и клиент в одном широковещательном домене, порты
+# открыты
 
-The programs included with the Debian GNU/Linux system are free software;
-the exact distribution terms for each program are described in the
-individual files in /usr/share/doc/*/copyright.
+# 2. Подготовим сервер
+# Проверим
+root@deb-vm2:/home/vital# cat /etc/rsyslog.conf | grep -P 'imudp|imtcp'
+module(load="imudp")
+input(type="imudp" port="514")
+module(load="imtcp")
+input(type="imtcp" port="514")
+# Все отлично
 
-Debian GNU/Linux comes with ABSOLUTELY NO WARRANTY, to the extent
-permitted by applicable law.
-Last login: Mon Aug 18 16:07:02 2025 from 192.168.122.20
-borg@deb-vm:~$
-#Как оказалось удачно
+# Добавим в конец файли строки
+cat <<EOF >> /etc/rsyslog.conf
+#Add remote logs
+$template RemoteLogs,"/var/log/rsyslog/%HOSTNAME%/%PROGRAMNAME%.log"
+*.* ?RemoteLogs
+EOF 
 
-# 7. Инициализируем репозиторий borg c клиентской на сервеную ВМ:
-borg@deb-vm:~$ borg init --encryption=repokey borg@192.168.122.220:/var/backup/
+# Перезапустим rsyslog,проверим статус, слушающие порты
+root@deb-vm2:/home/vital# systemctl restart rsyslog && systemctl status rsyslog && ss -tunlp | grep 514
+● rsyslog.service - System Logging Service
+     Loaded: loaded (/lib/systemd/system/rsyslog.service; enabled; preset: enabled)
+     Active: active (running) since Sun 2025-08-24 19:58:41 +05; 23ms ago
+TriggeredBy: ● syslog.socket
+       Docs: man:rsyslogd(8)
+             man:rsyslog.conf(5)
+             https://www.rsyslog.com/doc/
+   Main PID: 5891 (rsyslogd)
+      Tasks: 10 (limit: 2289)
+     Memory: 3.1M
+        CPU: 9ms
+     CGroup: /system.slice/rsyslog.service
+             └─5891 /usr/sbin/rsyslogd -n -iNONE
 
-# 8.Запускаем для проверки создания бэкапа
-root@deb-vm2:/home/vital# borg create --stats --list borg@192.168.122.220:/var/backup/::"etc-{now:%Y-%m-%d_%H:%M:%S}" /etc
-root@deb-vm2:/home/vital# Enter passphrase for key ssh://borg@192.168.122.220/var/backup:
+Aug 24 19:58:41 deb-vm2 systemd[1]: Starting rsyslog.service - System Logging Service...
+Aug 24 19:58:41 deb-vm2 systemd[1]: Started rsyslog.service - System Logging Service.
+Aug 24 19:58:41 deb-vm2 rsyslogd[5891]: imuxsock: Acquired UNIX socket '/run/systemd/journal/syslog' (fd 3) from systemd.  [v8.2302.0]
+Aug 24 19:58:41 deb-vm2 rsyslogd[5891]: [origin software="rsyslogd" swVersion="8.2302.0" x-pid="5891" x-info="https://www.rsyslog.com"] start
+udp   UNCONN 0      0            0.0.0.0:514        0.0.0.0:*    users:(("rsyslogd",pid=5891,fd=6))
+udp   UNCONN 0      0               [::]:514           [::]:*    users:(("rsyslogd",pid=5891,fd=7))
+tcp   LISTEN 0      25           0.0.0.0:514        0.0.0.0:*    users:(("rsyslogd",pid=5891,fd=8))
+tcp   LISTEN 0      25              [::]:514           [::]:*    users:(("rsyslogd",pid=5891,fd=9))
+# Сервер к приему логов готов
 
-# 9.Проверим что же вышло
-root@deb-vm2:/home/vital# borg list borg@192.168.122.220:/var/backup
-Enter passphrase for key ssh://borg@192.168.122.220/var/backup:
-etc-2025-08-18_16:17:43              Mon, 2025-08-18 16:17:49 [1b63c2e5bbc1aeec6795c379bac435cd234d6199b4f6395494c7fea23efb06aa]
-# Все ок
+# 3. Подготовим клиента, на котором работает nginx
+# Допишем в конфиг файл nginx строки
+root@deb-vm:/home/vital# nano /etc/nginx/nginx.conf 
+error_log /var/log/nginx/error.log;
+error_log syslog:server=192.168.122.20:514,tag=nginx_error;
+access_log syslog:server=192.168.122.20:514,tag=nginx_access,severity=info combined;
 
-# 10.Автоматизируем создание бэкапов с помощью systemd
-# Создаем сервис и таймер в каталоге /etc/systemd/system/
+# Проверим все ли хорошо
+root@deb-vm:/home/vital# nginx -t && systemctl restart nginx && systemctl status nginx && ss -tunlp | grep 80
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+● nginx.service - A high performance web server and a reverse proxy server
+     Loaded: loaded (/lib/systemd/system/nginx.service; enabled; preset: enabled)
+     Active: active (running) since Sun 2025-08-24 20:09:03 +05; 26ms ago
+       Docs: man:nginx(8)
+    Process: 8246 ExecStartPre=/usr/sbin/nginx -t -q -g daemon on; master_process on; (code=exited, status=0/SUCCESS)
+    Process: 8260 ExecStart=/usr/sbin/nginx -g daemon on; master_process on; (code=exited, status=0/SUCCESS)
+   Main PID: 8261 (nginx)
+      Tasks: 1 (limit: 2312)
+     Memory: 1.0M
+        CPU: 19ms
+     CGroup: /system.slice/nginx.service
+             ├─8261 "nginx: master process /usr/sbin/nginx -g daemon on; master_process on;"
+             └─8264 "nginx: master process /usr/sbin/nginx -g daemon on; master_process on;"
 
-root@deb-vm2:/home/vital# nano /etc/systemd/system/borg-backup.service
-[Unit]
-Description=Borg Backup
+Aug 24 20:09:03 deb-vm systemd[1]: Starting nginx.service - A high performance web server and a reverse proxy server...
+Aug 24 20:09:03 deb-vm systemd[1]: Started nginx.service - A high performance web server and a reverse proxy server.
+tcp   LISTEN 0      511          0.0.0.0:80        0.0.0.0:*    users:(("nginx",pid=8264,fd=4),("nginx",pid=8261,fd=4))
+tcp   LISTEN 0      511             [::]:80           [::]:*    users:(("nginx",pid=8264,fd=5),("nginx",pid=8261,fd=5))
 
-[Service]
-Type=oneshot
+# 4. Настроим аудит, который проследит за изменением конфигов nginx
+root@deb-vm:/home/vital# touch /etc/audit/rules.d/nginx.rules && echo "-w /etc/nginx -p wax -k monitor_nginx" > /etc/audit/rules.d/nginx.rules
+root@deb-vm:/home/vital# systemctl restart auditd
 
-# Парольная фраза
-Environment="BORG_PASSPHRASE=123456"
-# Репозиторий
-Environment=repo=borg@192.168.122.220:/var/backup/
-# Что бэкапим
-Environment=target=/etc
+# Проверим что же у нас вышло
+root@deb-vm:/home/vital# auditctl -l
+-w /etc/nginx -p wxa -k monitor_nginx
 
-# Создание бэкапа
-ExecStart=/bin/borg create \
-    --stats                \
-    ${repo}::etc-{now:%%Y-%%m-%%d_%%H:%%M:%%S} ${target}
+# Попробуем вот так
+root@deb-vm:/home/vital# touch /etc/nginx/{123,124}
+root@deb-vm:/home/vital# rm /etc/nginx/{123,124}
+root@deb-vm:/home/vital# ausearch -f /etc/nginx
 
-# Проверка бэкапа
-ExecStart=/bin/borg check ${repo}
+time->Sun Aug 24 20:16:23 2025
+type=PROCTITLE msg=audit(1756048583.452:1854): proctitle=746F756368002F6574632F6E67696E782F313233002F6574632F6E67696E782F313234
+type=PATH msg=audit(1756048583.452:1854): item=1 name="/etc/nginx/123" inode=38 dev=fd:01 mode=0100644 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0
+type=PATH msg=audit(1756048583.452:1854): item=0 name="/etc/nginx/" inode=68858 dev=fd:01 mode=040755 ouid=0 ogid=0 rdev=00:00 nametype=PARENT cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0
+type=CWD msg=audit(1756048583.452:1854): cwd="/home/vital"
+type=SYSCALL msg=audit(1756048583.452:1854): arch=c000003e syscall=257 success=yes exit=3 a0=ffffff9c a1=7ffc92aa9ea7 a2=941 a3=1b6 items=2 ppid=7353 pid=8302 auid=1000 uid=0 gid=0 euid=0 suid=0 fsuid=0 egid=0 sgid=0 fsgid=0 tty=pts1 ses=171 comm="touch" exe="/usr/bin/touch" subj=unconfined key="monitor_nginx"
+----
+time->Sun Aug 24 20:16:23 2025
+type=PROCTITLE msg=audit(1756048583.456:1855): proctitle=746F756368002F6574632F6E67696E782F313233002F6574632F6E67696E782F313234
+type=PATH msg=audit(1756048583.456:1855): item=1 name="/etc/nginx/124" inode=64 dev=fd:01 mode=0100644 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0
+type=PATH msg=audit(1756048583.456:1855): item=0 name="/etc/nginx/" inode=68858 dev=fd:01 mode=040755 ouid=0 ogid=0 rdev=00:00 nametype=PARENT cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0
+type=CWD msg=audit(1756048583.456:1855): cwd="/home/vital"
+type=SYSCALL msg=audit(1756048583.456:1855): arch=c000003e syscall=257 success=yes exit=0 a0=ffffff9c a1=7ffc92aa9eb6 a2=941 a3=1b6 items=2 ppid=7353 pid=8302 auid=1000 uid=0 gid=0 euid=0 suid=0 fsuid=0 egid=0 sgid=0 fsgid=0 tty=pts1 ses=171 comm="touch" exe="/usr/bin/touch" subj=unconfined key="monitor_nginx"
+----
+time->Sun Aug 24 20:16:33 2025
+type=PROCTITLE msg=audit(1756048593.868:1856): proctitle=726D002F6574632F6E67696E782F313233002F6574632F6E67696E782F313234
+type=PATH msg=audit(1756048593.868:1856): item=1 name="/etc/nginx/123" inode=38 dev=fd:01 mode=0100644 ouid=0 ogid=0 rdev=00:00 nametype=DELETE cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0
+type=PATH msg=audit(1756048593.868:1856): item=0 name="/etc/nginx/" inode=68858 dev=fd:01 mode=040755 ouid=0 ogid=0 rdev=00:00 nametype=PARENT cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0
+type=CWD msg=audit(1756048593.868:1856): cwd="/home/vital"
+type=SYSCALL msg=audit(1756048593.868:1856): arch=c000003e syscall=263 success=yes exit=0 a0=ffffff9c a1=55bdfbce34a0 a2=0 a3=7f211cb03f80 items=2 ppid=7353 pid=8303 auid=1000 uid=0 gid=0 euid=0 suid=0 fsuid=0 egid=0 sgid=0 fsgid=0 tty=pts1 ses=171 comm="rm" exe="/usr/bin/rm" subj=unconfined key="monitor_nginx"
+----
+time->Sun Aug 24 20:16:33 2025
+type=PROCTITLE msg=audit(1756048593.872:1857): proctitle=726D002F6574632F6E67696E782F313233002F6574632F6E67696E782F313234
+type=PATH msg=audit(1756048593.872:1857): item=1 name="/etc/nginx/124" inode=64 dev=fd:01 mode=0100644 ouid=0 ogid=0 rdev=00:00 nametype=DELETE cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0
+type=PATH msg=audit(1756048593.872:1857): item=0 name="/etc/nginx/" inode=68858 dev=fd:01 mode=040755 ouid=0 ogid=0 rdev=00:00 nametype=PARENT cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0
+type=CWD msg=audit(1756048593.872:1857): cwd="/home/vital"
+type=SYSCALL msg=audit(1756048593.872:1857): arch=c000003e syscall=263 success=yes exit=0 a0=ffffff9c a1=55bdfbce34a0 a2=0 a3=100 items=2 ppid=7353 pid=8303 auid=1000 uid=0 gid=0 euid=0 suid=0 fsuid=0 egid=0 sgid=0 fsgid=0 tty=pts1 ses=171 comm="rm" exe="/usr/bin/rm" subj=unconfined key="monitor_nginx"
 
-# Очистка старых бэкапов
-ExecStart=/bin/borg prune \
-    --keep-daily  90      \
-    --keep-monthly 12     \
-    --keep-yearly  1      \
-    ${repo}
+# Все хорошо, все отслеживается
 
+# Настроим отправку на сборщик логов
+root@deb-vm:/home/vital# nano /etc/rsyslog.d/audit.conf
 
-root@deb-vm2:/home/vital# nano /etc/systemd/system/borg-backup.timer
+$ModLoad imfile
+$InputFileName /var/log/audit/audit.log
+$InputFileTag nginx_edit_conf:
+$InputFileStateFile audit_nginx_log
+$InputFileSeverity info
+$InputFileFacility local0
+$InputRunFileMonitor
+$InputFilePollInterval 10
+*.* @@192.168.122.20:514
 
-[Unit]
-Description=Borg Backup
+# Сделаем рестарт службы
+root@deb-vm:/home/vital# systemctl restart rsyslog && systemctl status rsyslog
+● rsyslog.service - System Logging Service
+     Loaded: loaded (/lib/systemd/system/rsyslog.service; enabled; preset: enabled)
+     Active: active (running) since Sun 2025-08-24 20:24:29 +05; 22ms ago
+TriggeredBy: ● syslog.socket
+       Docs: man:rsyslogd(8)
+             man:rsyslog.conf(5)
+             https://www.rsyslog.com/doc/
+   Main PID: 8342 (rsyslogd)
+      Tasks: 5 (limit: 2312)
+     Memory: 996.0K
+        CPU: 9ms
+     CGroup: /system.slice/rsyslog.service
+             └─8342 /usr/sbin/rsyslogd -n -iNONE
 
-[Timer]
-OnBootSec=5min
-OnUnitActiveSec=5min
+Aug 24 20:24:29 deb-vm systemd[1]: Starting rsyslog.service - System Logging Service...
+Aug 24 20:24:29 deb-vm systemd[1]: Started rsyslog.service - System Logging Service.
+Aug 24 20:24:29 deb-vm rsyslogd[8342]: imuxsock: Acquired UNIX socket '/run/systemd/journal/syslog' (fd 3) from systemd.  [v8.2302.0]
+Aug 24 20:24:29 deb-vm rsyslogd[8342]: [origin software="rsyslogd" swVersion="8.2302.0" x-pid="8342" x-info="https://www.rsyslog.com"] start
 
-[Install]
-WantedBy=timers.target
+# 5. Идем проверять сервер сбора логов
 
-# 11. Включаем и запускаем службу таймера
-root@deb-vm2:/home/vital# systemctl enable borg-backup.timer 
-root@deb-vm2:/home/vital# systemctl start borg-backup.timer
+# Сначала "постучимся" на nginx
+root@deb-vm2:/home/vital# curl 192.168.122.220
+<html>
+<head><title>404 Not Found</title></head>
+<body>
+<center><h1>404 Not Found</h1></center>
+<hr><center>nginx/1.22.1</center>
+</body>
+</html>
 
-# 12. Проверяем работу таймера
-root@deb-vm2:/home/vital# systemctl list-timers --all
-NEXT                        LEFT          LAST                        PASSED       UNIT                         ACTIVATES
-Tue 2025-08-19 17:35:36 +05 3min 16s left Tue 2025-08-19 17:30:36 +05 1min 43s ago borg-backup.timer            borg-backup.service
+# Потом проверим наши логи
+root@deb-vm2:/home/vital# ls -la /var/log/rsyslog/deb-vm/ | grep nginx
+-rw-r----- 1 root adm   3153 Aug 24 20:25 nginx_access.log
+-rw-r----- 1 root adm  69904 Aug 24 20:24 nginx_edit_conf.log
 
-# 13. Проверим настройку процессов логирования
-root@deb-vm2:/home/vital# journalctl -u borg-backup.service | tail
-Aug 19 17:30:40 deb-vm2 borg[4520]: ------------------------------------------------------------------------------
-Aug 19 17:30:40 deb-vm2 borg[4520]:                        Original size      Compressed size    Deduplicated size
-Aug 19 17:30:40 deb-vm2 borg[4520]: This archive:                6.80 MB              1.78 MB                652 B
-Aug 19 17:30:40 deb-vm2 borg[4520]: All archives:               27.21 MB              7.10 MB              2.10 MB
-Aug 19 17:30:40 deb-vm2 borg[4520]:                        Unique chunks         Total chunks
-Aug 19 17:30:40 deb-vm2 borg[4520]: Chunk index:                     973                 3907
-Aug 19 17:30:40 deb-vm2 borg[4520]: ------------------------------------------------------------------------------
-Aug 19 17:30:47 deb-vm2 systemd[1]: borg-backup.service: Deactivated successfully.
-Aug 19 17:30:47 deb-vm2 systemd[1]: Finished borg-backup.service - Borg Backup.
-Aug 19 17:30:47 deb-vm2 systemd[1]: borg-backup.service: Consumed 3.986s CPU time.
-# Как видим логирование ведется
+# Все интересующее нас к счастью имеется
+root@deb-vm2:/home/vital# cat /var/log/rsyslog/deb-vm/nginx_access.log | grep 20:
+2025-08-22T20:19:28+05:00 deb-vm nginx_access: 192.168.20.2 - - [22/Aug/2025:20:19:28 +0500] "GET / HTTP/1.1" 404 187 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36"
+2025-08-22T20:19:36+05:00 deb-vm nginx_access: 192.168.20.2 - - [22/Aug/2025:20:19:36 +0500] "GET / HTTP/1.1" 404 187 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36"
+2025-08-22T20:19:37+05:00 deb-vm nginx_access: 192.168.20.2 - - [22/Aug/2025:20:19:37 +0500] "GET / HTTP/1.1" 404 187 "-" "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/109.0.0.0 Safari/537.36"
+2025-08-24T20:25:54+05:00 deb-vm nginx_access: 192.168.122.20 - - [24/Aug/2025:20:25:54 +0500] "GET / HTTP/1.1" 404 153 "-" "curl/7.88.1"
 
-# 14. Настроим ротацию логов по времени
-root@deb-vm2:/home/vital# journalctl --vacuum-time=1years
-# Задание выполнено
+root@deb-vm2:/home/vital# cat /var/log/rsyslog/deb-vm/nginx_edit_conf.log | grep /etc/nginx | tail
+2025-08-24T20:05:43+05:00 deb-vm nginx_edit_conf: type=PATH msg=audit(1756047937.672:1840): item=0 name="/etc/nginx/" inode=68858 dev=fd:01 mode=040755 ouid=0 ogid=0 rdev=00:00 nametype=PARENT cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0#035OUID="root" OGID="root"
+2025-08-24T20:05:43+05:00 deb-vm nginx_edit_conf: type=PATH msg=audit(1756047937.672:1840): item=1 name="/etc/nginx/.nginx.conf.swp" inode=67 dev=fd:01 mode=0100644 ouid=0 ogid=0 rdev=00:00 nametype=DELETE cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0#035OUID="root" OGID="root"
+2025-08-24T20:16:23+05:00 deb-vm nginx_edit_conf: type=PATH msg=audit(1756048583.452:1854): item=0 name="/etc/nginx/" inode=68858 dev=fd:01 mode=040755 ouid=0 ogid=0 rdev=00:00 nametype=PARENT cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0#035OUID="root" OGID="root"
+2025-08-24T20:16:23+05:00 deb-vm nginx_edit_conf: type=PATH msg=audit(1756048583.452:1854): item=1 name="/etc/nginx/123" inode=38 dev=fd:01 mode=0100644 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0#035OUID="root" OGID="root"
+2025-08-24T20:16:23+05:00 deb-vm nginx_edit_conf: type=PATH msg=audit(1756048583.456:1855): item=0 name="/etc/nginx/" inode=68858 dev=fd:01 mode=040755 ouid=0 ogid=0 rdev=00:00 nametype=PARENT cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0#035OUID="root" OGID="root"
+2025-08-24T20:16:23+05:00 deb-vm nginx_edit_conf: type=PATH msg=audit(1756048583.456:1855): item=1 name="/etc/nginx/124" inode=64 dev=fd:01 mode=0100644 ouid=0 ogid=0 rdev=00:00 nametype=NORMAL cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0#035OUID="root" OGID="root"
+2025-08-24T20:16:33+05:00 deb-vm nginx_edit_conf: type=PATH msg=audit(1756048593.868:1856): item=0 name="/etc/nginx/" inode=68858 dev=fd:01 mode=040755 ouid=0 ogid=0 rdev=00:00 nametype=PARENT cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0#035OUID="root" OGID="root"
+2025-08-24T20:16:33+05:00 deb-vm nginx_edit_conf: type=PATH msg=audit(1756048593.868:1856): item=1 name="/etc/nginx/123" inode=38 dev=fd:01 mode=0100644 ouid=0 ogid=0 rdev=00:00 nametype=DELETE cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0#035OUID="root" OGID="root"
+2025-08-24T20:16:33+05:00 deb-vm nginx_edit_conf: type=PATH msg=audit(1756048593.872:1857): item=0 name="/etc/nginx/" inode=68858 dev=fd:01 mode=040755 ouid=0 ogid=0 rdev=00:00 nametype=PARENT cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0#035OUID="root" OGID="root"
+2025-08-24T20:16:33+05:00 deb-vm nginx_edit_conf: type=PATH msg=audit(1756048593.872:1857): item=1 name="/etc/nginx/124" inode=64 dev=fd:01 mode=0100644 ouid=0 ogid=0 rdev=00:00 nametype=DELETE cap_fp=0 cap_fi=0 cap_fe=0 cap_fver=0 cap_frootid=0#035OUID="root" OGID="root"
+
+# Все получилось, задача выполнена
