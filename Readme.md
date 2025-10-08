@@ -1,195 +1,191 @@
-# №30 Домашнее задание
-# Сценарии iptables
-# Написать сценарии iptables.
-# 1.Реализовать knocking port.СentralRouter может попасть на ssh inetrRouter через knock скрипт
+# OSPF
+# Задание: "Создать домашнюю сетевую лабораторию,yаучится настраивать протокол OSPF в Linux-based системах"
 
-# 1.1 Заходим на inetrRouter, подгатавливаем его
-# Пишем правила "доступа", сразу же коментируем их, чтобы понимать, что происходит, так удобнее
-# А нам собственно надо чтобы происходило следующее:
-# после последовательного стукача в порты которые мы выбрали (8881 затем 7777, а уж после 9991)
-# открылся порт 22 - для доступа по ssh.
-root@ubuntuhost:/home/vital# nano 5.knock_iptables
-#!/bin/bash
-# Добавим необходимые нам дополнительные цепочки
-iptables -N TRAFFIC
-iptables -N SSH-INPUT
-iptables -N SSH-INPUTTWO
+# 1. Поднять три виртуалки
+# три виртуалки с прошлого занятия у нас есть
+# Вот их исходные данные
+# ip v4 адреса можем не прописывать на интерфейсах, они нам без нужды, пропишем их позже на sub(vlan в нашем случае) интерфейсах
+# Схема их соединения такова (кольцо одним словом): 
+# router1(enp1s0f1)-router2(enp1s0f0)
+# router1(enp1s0f2)-router3(enp1s0f0)
+# router2(enp1s0f4)-router3(enp1s0f3)
 #
-# Весь трафик приходящий на цепочку "INPUT" с интерфейса "vnet3" пусть смело отправляется во вновь созданную цепочку с именем "TRAFFIC"
-# И ежели этот трафик уже ESTABLISHED или что страшнее RELATED то пусть идет себе спокойно (будет "ACCEPT")
-iptables -A INPUT -i virbr0 -j TRAFFIC
-iptables -A TRAFFIC -m state --state ESTABLISHED,RELATED -j ACCEPT
-#
-# Ну а если он не ESTABLISHED,RELATED, а "NEW" c портом назначения 22 prot tcp и его источник есть в списке SSH2, пусть на 30 секунд будет "ACCEPT"
-# Если же трафик не удовлетворяет вышеуказанному правилу, но он есть в списке SSH2,  то удалим его из списка SSH2
-iptables -A TRAFFIC -m state --state NEW -m tcp -p tcp --dport 22 -m recent --rcheck --seconds 30 --name SSH2 -j ACCEPT
-iptables -A TRAFFIC -m state --state NEW -m tcp -p tcp -m recent --name SSH2 --remove -j DROP
-#
-# Проверяем трафик далее...Если трафик "NEW" c портом назначения 9991 prot tcp и его источник есть в списке SSH1, пусть идет в цепочку "SSH-INPUTTWO"
-# Если же трафик не удовлетворяет вышеуказанному правилу, но он есть в списке SSH1,  то удалим его из списка SSH1
-iptables -A TRAFFIC -m state --state NEW -m tcp -p tcp --dport 9991 -m recent --rcheck --name SSH1 -j SSH-INPUTTWO
-iptables -A TRAFFIC -m state --state NEW -m tcp -p tcp -m recent --name SSH1 --remove -j DROP
-#
-# Проверяем трафик далее...Если трафик "NEW" c портом назначения 7777 prot tcp и его источник есть в списке SSH0, пусть идет в цепочку "SSH-INPUT"
-# Если же трафик не удовлетворяет вышеуказанному правилу, но он есть в списке SSH0,  то удалим его из списка SSH0
-iptables -A TRAFFIC -m state --state NEW -m tcp -p tcp --dport 7777 -m recent --rcheck --name SSH0 -j SSH-INPUT
-iptables -A TRAFFIC -m state --state NEW -m tcp -p tcp -m recent --name SSH0 --remove -j DROP
-#
-# Проверяем трафик далее...Если трафик "NEW" c портом назначения 8881 prot tcp добавим  его источник в список SSH0 и "ВЫБРОСИМ"
-iptables -A TRAFFIC -m state --state NEW -m tcp -p tcp --dport 8881 -m recent --name SSH0 --set -j DROP
-#
-# Трафик залетевший цепочку "SSH-INPUT" добавим его источник в список SSH1 и "ВЫБРОСИМ"
-# Трафик залетевший цепочку "SSH-INPUTTWO" добавим его источник в список SSH2 и "ВЫБРОСИМ"
-iptables -A SSH-INPUT -m recent --name SSH1 --set -j DROP
-iptables -A SSH-INPUTTWO -m recent --name SSH2 --set -j DROP
-# Все остальное, что не удовлетворяет ни одному из приведенных правил тихо "ВЫБРОСИМ"
-iptables -A TRAFFIC -j DROP
-#
-# Все готово, опустим момент как сделать текстовый файл скрипта исполняемым, это и так понятно.
-# Просто запустим скрипт
-root@ubuntuhost:/home/vital# ./5.knock_iptables
-# Ну как то так, сохранять тоже не буду данные правила, пусть себе спокойно "сдохнут" после рестарта системы
-# это тестовый стенд, после нашего теста они мне не нужны.
-# И вот еще что...В таблице filter все цепочки с политикой ACCEPT, и других правил нет
-# в других таблицах (за исключением nat - там только маскарад) также нет никаких правил, все ACCEPT
-#
-# 1.2 Заходим на СentralRouter, подготавливаем его, пишем скрипт
-root@router1:/home/vital# nano knock
-# Первым аргументом будет хост(HOST) к которому мы подключаемся, остальные(ARG) - порты в которые мы "стучим"
-# "Стукачим" утилитой nmap, сканирование завершится через 100 секунд, попытка будет одна, повторов будет 0
-# Следующее действие - это подключение по ssh. С помощью sshpass подставляем наш пароль xxxxxxxxx, логин vital
-# хост - первый аргумент переданный скрипту
-#!/bin/bash
-HOST=$1
-shift
-for ARG in "$@"
-do
-        nmap -Pn --host-timeout 100 --max-retries 0 -p $ARG $HOST
-done
-sshpass -p xxxxxxxxx ssh vital@$HOST
-#
-# Протестируем
-# Сначала так
-root@router1:/home/vital# sshpass -p xxxxxxxx ssh vital@192.168.122.1
-ssh: connect to host 192.168.122.1 port 22: Connection timed out
-# Полнейшая тишина и зафильтрованность
-# теперь так
-root@router1:/home/vital# ./knock 192.168.122.1 8881 7777 9991
-Starting Nmap 7.93 ( https://nmap.org ) at 2025-09-13 11:32 +05
-Warning: 192.168.122.1 giving up on port because retransmission cap hit (0).
-Nmap scan report for 192.168.122.1
-Host is up (0.00045s latency).
-
-PORT     STATE    SERVICE
-8881/tcp filtered galaxy4d
-MAC Address: 52:54:00:9B:C8:24 (QEMU virtual NIC)
-
-Nmap done: 1 IP address (1 host up) scanned in 13.28 seconds
-Starting Nmap 7.93 ( https://nmap.org ) at 2025-09-13 11:32 +05
-Warning: 192.168.122.1 giving up on port because retransmission cap hit (0).
-Nmap scan report for 192.168.122.1
-Host is up (0.00034s latency).
-
-PORT     STATE    SERVICE
-7777/tcp filtered cbt
-MAC Address: 52:54:00:9B:C8:24 (QEMU virtual NIC)
-
-Nmap done: 1 IP address (1 host up) scanned in 13.27 seconds
-Starting Nmap 7.93 ( https://nmap.org ) at 2025-09-13 11:32 +05
-Warning: 192.168.122.1 giving up on port because retransmission cap hit (0).
-Nmap scan report for 192.168.122.1
-Host is up (0.00031s latency).
-
-PORT     STATE    SERVICE
-9991/tcp filtered issa
-MAC Address: 52:54:00:9B:C8:24 (QEMU virtual NIC)
-
-Nmap done: 1 IP address (1 host up) scanned in 13.27 seconds
-Welcome to Ubuntu 24.04.2 LTS (GNU/Linux 6.8.0-79-generic x86_64)
-
- * Documentation:  https://help.ubuntu.com
- * Management:     https://landscape.canonical.com
- * Support:        https://ubuntu.com/pro
-
- System information as of Сб 13 сен 2025 06:32:49 UTC
-
-  System load:  0.06                Temperature:               15.0 C
-  Usage of /:   51.5% of 142.65GB   Processes:                 220
-  Memory usage: 28%                 Users logged in:           1
-  Swap usage:   0%                  IPv4 address for enp3s0f0: 172.16.0.4
-
- * Strictly confined Kubernetes makes edge and IoT secure. Learn how MicroK8s
-   just raised the bar for easy, resilient and secure K8s cluster deployment.
-
-   https://ubuntu.com/engage/secure-kubernetes-at-the-edge
-
-Расширенное поддержание безопасности (ESM) для Applications выключено.
-
-73 обновления может быть применено немедленно.
-Чтобы просмотреть дополнительные обновления выполните: apt list --upgradable
-
-Включите ESM Apps для получения дополнительных будущих обновлений безопасности.
-Смотрите https://ubuntu.com/esm или выполните: sudo pro status
-
-
-Last login: Sat Sep 13 06:31:20 2025 from 192.168.122.9
-vital@ubuntuhost:~$
-# Все хорошо, скрипт работает
-# 
-#
-# 2.Добавить inetRouter2, который виден(маршрутизируется (host-only тип сети для виртуалки)) с хоста или форвардится порт через локалхост-
-# - эту роль предоставим router3, который работает с прошлого занятия(сетевая лаборатория)
-# запустить nginx на centralServer - уже готов и работает также еще с прошлых занятий
-# пробросить 80й порт на inetRouter2 8080.- то есть наша задача: При обращении на порт 8080 router3(192.168.255.6)чтобы нас перенаправило
-# на sentralServer(192.168.0.2) порт 80, где у нас трудится наш nginx.
-# То есть смоделируем ситуацию - сервер переехал, а пользоатели стучаться по старому адресу. Решим проблему.
-# Все действия будем выполнять на router3.Разобьем задачу на две подзадачи:
-# 1) Первое что нам нужно поменять адрес назначения вместе с портом с 192.168.255.6:8080 на 192.168.0.2:80
-# За замену адреса НАЗНАЧЕНИЯ !!! у нас отвечает DNAT
-# Выполним
-root@router3:/home/vital# iptables -t nat -A PREROUTING -p tcp --dst 192.168.255.6 --dport 8080 -j DNAT --to-destination 192.168.0.2:80
-# Кстати проверим момент
-root@router3:/home/vital# cat /proc/sys/net/ipv4/ip_forward
+# На всех машинах включен роутинг, также как и на router1
+root@router1:/home/vital# cat /proc/sys/net/ipv4/ip_forward
 1
-# Все ОК
-# Ну все можно проверять адрес назначения поменяли - теперь все заработает
-root@s2:/home/vital# curl 192.168.255.6:8080
-# ФигВам - национальное жилище индейцев, не работает. Заботливо включенный на приемной стороне tcpdump
-# сообщил что пакеты доходят до нашего сервера, только вот он их пытается отправить отправителю напрямую,
-# минуя наш router3, только вот отправитель про них не в курсе. Он же отправил их на router3 и оттуда же их
-# и ждет, а не фиг пойми от кого....Такие дела...
-# Тогда нам нужно поменять еще и адрес отправителя
-# За замену адреса ИСТОЧНИКА !!! у нас отвечает SNAT
-# Выполним
-root@router3:/home/vital#iptables -t nat -A POSTROUTING -p tcp --sport 80 --dst 192.168.0.2 -j SNAT --to-source 192.168.255.6:8080
-# Что еще важно ? Нам важно понять, что DNAT работает до принятия решения о маршрутизации !!! А SNAT после !!! Все встало на свои места и заработало !!!
-root@s2:/home/vital# curl 192.168.0.2:22
-curl: (1) Received HTTP/0.9 when not allowed
-root@s2:/home/vital# curl 192.168.255.6:8080
-<!DOCTYPE html>
-<html>
-<head>
-<title>Welcome to nginx!</title>
-<style>
-html { color-scheme: light dark; }
-body { width: 35em; margin: 0 auto;
-font-family: Tahoma, Verdana, Arial, sans-serif; }
-</style>
-</head>
-<body>
-<h1>Welcome to nginx!</h1>
-<p>If you see this page, the nginx web server is successfully installed and
-working. Further configuration is required.</p>
-
-<p>For online documentation and support please refer to
-<a href="http://nginx.org/">nginx.org</a>.<br/>
-Commercial support is available at
-<a href="http://nginx.com/">nginx.com</a>.</p>
-
-<p><em>Thank you for using nginx.</em></p>
-</body>
-</html>
+# 
+# 2.Объединить их разными vlan
+# Сказано - сделано, приступим:
 #
-# дефолт в инет оставить через inetRouter.- здесь все понятно
+root@router1:/home/vital# cat /etc/network/if-up.d/vlan_script
+#!/bin/bash
+for v in 100 200
+do
+ip link add link enp1s0f1 name vlan1$v type vlan id $v
+ip link add link enp1s0f2 name vlan2$v type vlan id $v
+ip link set vlan1$v up
+ip link set vlan2$v up
+ip a add 172.18.$v.1/30 dev vlan1$v
+ip a add 172.18.$v.5/30 dev vlan2$v
+done
 #
-# Задача выполнена. Спасибо за внимание !
+root@router2:/home/vital# cat /etc/network/if-up.d/vlan_script
+#!/bin/bash
+for v in 100 200
+do
+ip link add link enp1s0f0 name vlan0$v type vlan id $v
+ip link add link enp1s0f4 name vlan4$v type vlan id $v
+ip link set vlan0$v up
+ip link set vlan4$v up
+ip a add 192.168.$v.2/30 dev vlan4$v
+ip a add 172.18.$v.2/30 dev vlan0$v
+done
+#
+root@router3:/home/vital# cat /etc/network/if-up.d/vlan_script
+#!/bin/bash
+for v in 100 200
+do
+ip link add link enp1s0f0 name vlan0$v type vlan id $v
+ip link add link enp1s0f3 name vlan3$v type vlan id $v
+ip link set vlan0$v up
+ip link set vlan3$v up
+ip a add 192.168.$v.1/30 dev vlan3$v
+ip a add 172.18.$v.6/30 dev vlan0$v
+done
+# В данных if-up скриптах мы объединили все роутеры разными Vlan(100 и 200)
+# 
+# 3.Поднимем oSPF на базе frr (выполним аналогичные действия на всех трех роутерах)
+root@router1:/home/vital# apt install -y frr frr-pythontools
+# Нам нужен только ospf демон, поэтому используем только его.
+root@router1:/home/vital# cat /etc/frr/daemons
+ospfd=yes
+все остальное=no(по дефолту)
+root@router1:/home/vital# systemctl restart frr
+# Произведем базовую настройку наших роутеров и включим вещание ospf на сети c VID=100 Между всеми нашими роутерами
+# выполним эти действия на каждом из роутеров(по аналогии)
+root@router1:/home/vital# vtysh
+router1# conf t                                                    #переходим в режим конфигурирования на нашем роутере
+router1(config)# hostname router1                                  #назначаем имя нашему роутеру                                
+router1(config)# access-list OUT seq 1 permit 192.168.0.0/28       #создаем access-list помещаем туда нашу подсеть, информацию о которой будем распространять  
+router1(config)# access-list OUT seq 2 deny any                    #всю остальную информацию распространять не будем, она нам не нужна(фильтруем)
+router1(config) router ospf                                        #переходим в режим конфигурирования ospf на нашем роутере
+router1(config-router)# ospf router-id 1.1.1.1                     #назначаем роутер-id нашему роутеру
+router1(config-router)# redistribute connected                     #распространим connected-маршруты этого нам будет достаточно
+router1(config-router)# network 172.18.100.0/30 area 0.0.0.10      #распространим в сеть соседа (router2) область 10
+router1(config-router)# network 172.18.100.4/30 area 0.0.0.10      #распространим в сеть соседа (router3) область 10
+router1(config-router)# distribute-list OUT out connected          #распространим лишь то, что в access-list OUT  
+#
+# конфигурация router2 будет выглядеть чуть по другому
+!
+hostname router2
+router ospf
+ ospf router-id 1.1.1.2
+ redistribute connected
+ network 172.18.100.0/30 area 0.0.0.10
+ network 192.168.100.0/30 area 0.0.0.10
+ distribute-list OUT out connected
+exit
+!
+access-list OUT seq 1 permit 192.168.2.128/26
+access-list OUT seq 2 deny any
+#
+# конфигурация router3 почти такая же
+!
+hostname router3
+router ospf
+ ospf router-id 1.1.1.3
+ redistribute connected
+ network 172.18.100.4/30 area 0.0.0.10
+ network 192.168.100.0/30 area 0.0.0.10
+ distribute-list OUT out connected
+exit
+!
+access-list OUT seq 1 permit 192.168.1.0/25
+access-list OUT seq 2 deny any
+!
+end
+# Здесь отличие лишь в том, что на роутерах 2 и 3 мы распространяем другие маршруты и вещаем ospf также в сторону соседей
+# Проверим что у нас получилось
+root@router1:/home/vital# vtysh -c 'show ip route' | grep O
+       O - OSPF, I - IS-IS, B - BGP, E - EIGRP, N - NHRP,
+       f - OpenFabric,
+O   172.18.100.0/30 [110/1000] is directly connected, vlan1100, weight 1, 18:53:41
+O   172.18.100.4/30 [110/3000] via 172.18.100.2, vlan1100, weight 1, 18:06:49
+O>* 192.168.1.0/25 [110/20] via 172.18.100.2, vlan1100, weight 1, 18:06:48
+O>* 192.168.2.128/26 [110/20] via 172.18.100.2, vlan1100, weight 1, 18:53:26
+O>* 192.168.100.0/30 [110/2000] via 172.18.100.2, vlan1100, weight 1, 18:53:27
+# Все хорошо, поймали три маршрута.Обмен маршрутной информацией идет протокол работает
+# На всех остальных участниках OSPF-area ситуация такая же.
+# После конфигурирования не забываем сохранить конфигурацию
+router1(config-router)# quit
+router1(config)# quit
+router1# write
+#
+#
+# 4.Изобразим ассиметричный роутинг, для этого искуственно завысим стоимость одного из линков на роутере router1
+root@router1:/home/vital# vtysh
+router1# conf t
+router1(config)# interface 
+router1(config)# interface vlan2100
+router1(config-if)# ip ospf cost 65535
+# запустим icmp запрос с сервера s1 192.168.0.2, распологающегося за роутером router1 на сервер s2 192.168.1.2,
+# распологающийся за роутером r3. Наш icmp пакет должен пройти через router1 - router3 затем достигнуть адресата.
+# Но так как мы завысили стоимость линка к router3, icmp пакет пойдет по более "дешевому" пути router1 - router2 - router3 и уж после достигнет
+# адресата. В обратном же направлении стоимость линков одинакова и icmp пакет должен пройти через router3 - router1 затем достигнет отправителя icmp echo request.
+# На лицо несимметричная маршрутизация.
+# Проверим это
+# Со стороны сервера s1
+root@s1:/home/vital# traceroute 192.168.1.2
+traceroute to 192.168.1.2 (192.168.1.2), 30 hops max, 60 byte packets
+ 1  192.168.0.1 (192.168.0.1)  1.682 ms  1.626 ms  1.816 ms
+ 2  172.18.100.2 (172.18.100.2)  9.654 ms  9.461 ms  9.294 ms
+ 3  172.18.100.6 (172.18.100.6)  10.017 ms  9.842 ms  10.012 ms
+ 4  192.168.1.2 (192.168.1.2)  9.600 ms  10.106 ms  10.295 ms
+# В обратном направлении(со стороны сервера s3)
+traceroute to 192.168.0.2 (192.168.0.2), 30 hops max, 60 byte packets
+ 1  192.168.1.1 (192.168.1.1)  1.302 ms  1.421 ms  1.491 ms
+ 2  172.18.100.1 (172.18.100.1)  8.170 ms  8.000 ms  8.702 ms
+ 3  192.168.0.2 (192.168.0.2)  9.153 ms  8.912 ms  8.731 ms
+# Примечание: 172.18.100.1 - он же 192.168.0.1
+#             172.18.100.6 - он же 192.168.1.1
+#
+# 5.Сделаем один из линков "дорогим", но что бы при этом роутинг был симметричным.
+# Так как дорогой линк мы уже сделали, необходимо теперь избавиться от ассиметриии в маршруте не меняя стоимости линка
+# Ассиметрия на линке воникает на участке сети router3. Echo request приходит по линку vlan3100, а вот Echo reply по линку vlan0100
+# Как избавиться от этого ? Попробуем использовать PBR и iptables mangle
+# Первым делом создадим пользовательскую таблицу маршрутизации
+root@router3:/home/vital# echo '2 vlan3100' >> /etc/iproute2/rt_tables 
+# Добавим туда требуемый маршрут
+root@router3:/home/vital# ip route add default via 192.168.100.2 dev vlan3100 table vlan3100
+# Добавим правило использования таблицы маршрутизации для маркированного трафика 
+root@router3:/home/vital# ip rule add priority 102 fwmark 0x2 lookup vlan3100
+# Ну и наконец промаркируем наш трафик
+root@router3:/home/vital# cat ./script_ipt_mark
+#!/bin/bash
+# Сбрасываем все правила в таблице mangle
+iptables -F -t mangle
+# Маркируем входящий в интерфейс vlan3100 трафик
+iptables -t mangle -A INPUT -j CONNMARK -i vlan3100 --set-mark 0x2
+# Присваиваем такую же метку исходящему трафику для его попадания в нашу таблицу
+# Таким образом получается откуда пришел туда и ушел
+iptables -t mangle -A OUTPUT -j CONNMARK -m connmark --mark 0x2 --restore-mark
+# Тем же самым образом маркируем не только входящий, но и транзитный трафик
+iptables -t mangle -A PREROUTING -j CONNMARK -m connmark --mark 0x2 --restore-mark
+iptables -t mangle -A PREROUTING -j CONNMARK -i vlan3100 --set-mark 0x2
+# просматриваем наши правила
+iptables -t mangle -L -n -v
+# Проверим результат
+# Со стороны сервера s1
+root@s1:/home/vital# traceroute 192.168.1.2
+traceroute to 192.168.1.2 (192.168.1.2), 30 hops max, 60 byte packets
+ 1  192.168.0.1 (192.168.0.1)  1.682 ms  1.626 ms  1.816 ms
+ 2  172.18.100.6 (172.18.100.6)  8.017 ms  8.842 ms  8.014 ms
+ 3  192.168.1.2 (192.168.1.2)  9.600 ms  10.106 ms  10.295 ms
+# В обратном направлении(со стороны сервера s3)
+traceroute to 192.168.0.2 (192.168.0.2), 30 hops max, 60 byte packets
+ 1  192.168.1.1 (192.168.1.1)  1.302 ms  1.421 ms  1.491 ms
+ 2  172.18.100.1 (172.18.100.1)  8.170 ms  8.000 ms  8.702 ms
+ 3  192.168.0.2 (192.168.0.2)  9.153 ms  8.912 ms  8.731 ms
+# Примечание: 172.18.100.1 - он же 192.168.0.1
+#             172.18.100.6 - он же 192.168.1.1
+# Результат положительный, наш стенд работает.
